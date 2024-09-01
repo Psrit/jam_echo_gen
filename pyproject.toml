@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools", "wheel", "Cython", "numpy"]
+
+[project]
+name = "jam_echo_gen"
+authors = [{ name = "Nanjing Research Institute of Electronics Technology" }]
+readme = "README.md"
+dependencies = ["numpy", "scipy"]
+requires-python = ">= 3.7"
+version = "0.1.0"
