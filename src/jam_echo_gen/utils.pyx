@@ -1,4 +1,5 @@
 # cython: language_level=3
+# distutils: language = c++
 
 import logging
 import numbers
@@ -10,6 +11,9 @@ import numpy as np
 cimport numpy as cnp
 
 from libc.math cimport ceil, log2
+from libcpp.algorithm cimport sort
+from libcpp.random cimport random_device, mt19937, uniform_real_distribution
+from libcpp.vector cimport vector
 
 cdef int _two_pow_ceil(double a):
     """ Return the smallest value of 2^n that is not smaller than `a`. """
@@ -98,52 +102,79 @@ cdef cnp.ndarray awgn(cnp.ndarray signal, double snr_db, signal_power_db=None):
         )
     return signal + noise
 
-cdef float _tuple_first_elem(tuple t):
-    return t[0]
+cdef bint _comp_intvs_by_first_elem((double, double) t1, (double, double) t2):
+    return t1[0] < t2[0]
 
-cpdef list join_interval(
-        list interval_union,
-        tuple interval
+cpdef vector[(double, double)] join_interval(
+        vector[(double, double)] interval_union,
+        (double, double) interval
 ):
+    """
+    Join an interval union and a new interval.
+
+    :param interval_union: An union of intervals, each element of which
+        represent a interval.
+        Following requirements must be met, otherwise the behavior is undefined:
+        1. The interval union must be already simplified (i.e. there are no 
+        overlapping intervals);
+        2. Contained intervals have been sorted according to their left bounds;
+        3. For each contained intervals, the left bound must be strictly less 
+        than the right bound.
+    :param interval: The new interval to be joined into `interval_union`.
+    :return: Joined interval union, where contained intervals have been sorted 
+        according to their left bounds.
+
+    """
     if interval[0] >= interval[1]:
         raise ValueError("`interval[0]` must be less than `interval[1]`.")
 
-    cdef list overlapped_intervals = []
-    cdef list joined = []
+    cdef vector[int] overlapped_intervals
+    cdef vector[(double, double)] joined = []
     cdef int i
-    cdef tuple _inter
-    for i, _inter in enumerate(interval_union):
+    cdef (double, double) _inter
+    for i in range(len(interval_union)):
+        _inter = interval_union[i]
         if _inter[0] <= interval[0] <= _inter[1]:
-            overlapped_intervals.append(i)
+            overlapped_intervals.push_back(i)
         elif (interval[0] <= _inter[0]) and (_inter[0] <= interval[1]):
-            overlapped_intervals.append(i)
+            overlapped_intervals.push_back(i)
         else:
-            joined.append(_inter)
+            joined.push_back(_inter)
 
-    if overlapped_intervals:
-        joined.append(
+    if overlapped_intervals.size():
+        joined.push_back(
             (min(interval[0], interval_union[overlapped_intervals[0]][0]),
-             max(interval[1], interval_union[overlapped_intervals[-1]][1]))
+             max(interval[1], interval_union[overlapped_intervals[overlapped_intervals.size() - 1]][1]))
         )
     else:
-        joined.append(interval)
+        joined.push_back(interval)
 
-    joined = sorted(joined, key=_tuple_first_elem)
+    sort(joined.begin(), joined.end(), _comp_intvs_by_first_elem)
     return joined
 
-def random_from_intervals(*intervals):
-    lengths = np.zeros(len(intervals))
-    total_len = 0.
-    for i, intv in enumerate(intervals):
+cpdef double random_from_intervals(vector[(double, double)] intervals):
+    cdef int num_intervals = intervals.size()
+    cdef vector[double] lengths = vector[double](num_intervals, 0)
+    cdef double total_len = 0.
+    
+    cdef int i
+    cdef (double, double) intv
+    cdef double intv_len
+    for i in range(num_intervals):
+        intv = intervals[i]
         intv_len = intv[1] - intv[0]
         if intv_len < 0:
             raise ValueError(f"Invalid interval: ({intv[0]}, {intv[1]})")
         lengths[i] = intv_len
-        total_len += intv[1] - intv[0]
+        total_len += intv_len
 
-    rand_val = np.random.rand() * sum(lengths)
-
-    for i, intv in enumerate(intervals):
+    cdef:
+        random_device rd
+        mt19937 gen = mt19937(rd())
+        uniform_real_distribution[double] dis = uniform_real_distribution[double](0., total_len)
+        double rand_val = dis(gen)
+    for i in range(num_intervals):
+        intv = intervals[i]
         if 0 <= rand_val < lengths[i]:
             return rand_val + intv[0]
         else:

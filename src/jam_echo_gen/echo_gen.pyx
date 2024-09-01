@@ -1,4 +1,5 @@
 # cython: language_level=3
+# distutils: language = c++
 
 import typing
 import warnings
@@ -216,7 +217,7 @@ def _random_jam_alphas_approx(
                / num_jams
     int_left = delta_m
     for i in range(num_jams):
-        alphas.append(random_from_intervals((int_left, int_left + d_subint)))
+        alphas.append(random_from_intervals([(int_left, int_left + d_subint)]))
         int_left += d_subint + delta_s
 
     alphas = alpha_c + np.array(alphas)

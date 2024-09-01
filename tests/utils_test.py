@@ -3,7 +3,7 @@ import warnings
 
 import numpy as np
 
-from jam_echo_gen.utils import db, is_real_array, two_pow_ceil
+from jam_echo_gen.utils import db, is_real_array, join_interval, two_pow_ceil
 
 
 def is_real(x):
@@ -130,3 +130,45 @@ class TwoPowCeilTest(unittest.TestCase):
     def test_scalar_argument(self):
         for _x_val, _y_val in zip(self.x, self.y):
             self.assertEqual(_y_val, two_pow_ceil(_x_val))
+
+
+class JoinIntervalTest(unittest.TestCase):
+    def test_join_overlapping_intervals(self):
+        test_data = (
+            ([(1, 2.35), (3, 4)], (2.35, 2.5), [(1, 2.5), (3, 4)]),
+            ([(1, 2.35), (3, 4)], (2.35, 3), [(1, 4)]),
+            ([(1, 2.35), (3, 4)], (2.35, 3.5), [(1, 4)]),
+            ([(1, 2.35), (3, 4)], (2.35, 4.5), [(1, 4.5)]),
+            ([(1, 2.35), (3, 4)], (1.5, 4.5), [(1, 4.5)]),
+            ([(1, 2.35), (3, 4)], (-1, 4.5), [(-1, 4.5)]),
+        )
+        for arg0, arg1, output in test_data:
+            self.assertEqual(
+                join_interval(arg0, arg1),
+                output
+            )
+
+    def test_join_non_overlapping_intervals(self):
+        test_data = (
+            ((), (0, 1), [(0, 1)]),
+            ([(1, 2.35), (3, 4)], (2.36, 2.5), [(1, 2.35), (2.36, 2.5), (3, 4)]),
+            ([(1, 2.35), (3, 4)], (-2, -1), [(-2, -1), (1, 2.35), (3, 4)]),
+            ([(1, 2.35), (3, 4)], (9, 10), [(1, 2.35), (3, 4), (9, 10)])
+        )
+        for arg0, arg1, output in test_data:
+            self.assertEqual(
+                join_interval(arg0, arg1),
+                output
+            )
+
+    def test_complicated_cases(self):
+        test_data = (
+            ([(-1.5, -0.9), (1, 2.35), (3, 4), (4.2, 5.0), (5.2, 9.9)],
+             (0.95, 4.5),
+             [(-1.5, -0.9), (0.95, 5.0), (5.2, 9.9)]),
+        )
+        for arg0, arg1, output in test_data:
+            self.assertEqual(
+                join_interval(arg0, arg1),
+                output
+            )
