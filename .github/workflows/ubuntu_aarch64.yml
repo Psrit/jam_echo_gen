@@ -1,0 +1,44 @@
+name: Build wheels on Ubuntu (aarch64)
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build-test-package-ubuntu-aarch64:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ubuntu-version: ["20.04", "22.04", "24.04"]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v1
+
+    - name: Build Python extension for ARM64
+      run: |
+        docker run --rm -v $(pwd):/source -w /source arm64v8/ubuntu:${{ matrix.ubuntu-version }} \
+        bash -c "apt-get update && apt-get install -y build-essential libffi-dev cmake && \
+        apt install software-properties-common -y && \
+        add-apt-repository ppa:deadsnakes/ppa && \
+        apt install python${{ matrix.python-version }} python${{ matrix.python-version }}-venv python${{ matrix.python-version }}-dev -y && \
+        python${{ matrix.python-version }} -m venv $VENV_PATH && \
+        source $VENV_PATH/bin/activate && \
+        ls -la $VENV_PATH/bin && \
+        $VENV_PATH/bin/pip install --upgrade pip setuptools wheel build && \
+        $VENV_PATH/bin/pip install .[test] && \
+        $VENV_PATH/bin/python -m unittest discover -p *test.py && \
+        $VENV_PATH/bin/python -m build"
+      env:
+        VENV_PATH: /venv/py${{ matrix.python-version }}
+
+    - name: Upload distributions
+      uses: actions/upload-artifact@v4
+      with:
+        name: built-dists-cpy${{ matrix.python-version }}-ubuntu-${{ matrix.ubuntu-version }}_aarch64
+        path: dist/
