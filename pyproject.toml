@@ -8,3 +8,15 @@ readme = "README.md"
 dependencies = ["numpy", "scipy"]
 requires-python = ">= 3.7"
 version = "0.1.0"
+
+[project.optional-dependencies]
+test = ["matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.pxd"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.c", "*.cpp"]

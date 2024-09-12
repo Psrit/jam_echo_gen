@@ -1,0 +1,94 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Build wheels on Alpine (aarch64)
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build-test-package-alpine-aarch64:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        alpine-versions:
+          - ["v3.13", "3.8"]  # python: 3.8.15-r0
+          - ["v3.15", "3.9"]  # python: 3.9.18-r0
+          - ["v3.17", "3.10"]  # python: 3.10.14-r2
+          - ["v3.19", "3.11"]  # python: 3.11.9-r1
+          - ["v3.20", "3.12"]  # python: 3.12.3-r2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Alpine Linux for aarch64
+        uses: jirutka/setup-alpine@v1
+        with:
+          arch: aarch64
+          branch: ${{ matrix.alpine-versions[0] }}
+          packages: gcc g++ cmake build-base python3 python3-dev py3-pip py3-numpy py3-scipy py3-matplotlib
+
+      - name: Check architecture
+        run: |
+          uname -m
+        shell: alpine.sh {0}
+
+      - name: Create python link
+        if: ${{ matrix.alpine-versions[0] == 'v3.13' || matrix.alpine-versions[0] == 'v3.15' }}
+        run: |
+          ln -s /usr/bin/python3 /usr/bin/python
+        shell: alpine.sh --root {0}
+
+      - name: Check Python
+        run: |
+          echo `python -c "import sys; print(sys.version, sys.implementation._multiarch)"`
+        shell: alpine.sh {0}
+
+      - name: Create venv
+        run: |
+          python -m venv --system-site-packages .venv
+        shell: alpine.sh {0}
+
+      - name: Install dependencies
+        run: |
+          . .venv/bin/activate
+          pip install --upgrade pip && pip install flake8 build
+        shell: alpine.sh {0}
+
+      # - name: Lint with flake8
+      #   run: |
+      #     . .venv/bin/activate
+      #     # stop the build if there are Python syntax errors or undefined names
+      #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      #     # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+      #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      #   shell: alpine.sh --root {0}
+
+      - name: Build and install
+        run: |
+          . .venv/bin/activate
+          pip install .[test]
+        shell: alpine.sh {0}
+
+      - name: Test with unittest
+        run: |
+          . .venv/bin/activate
+          python -m unittest discover -p *test.py
+        shell: alpine.sh {0}
+
+      - name: Build wheel
+        run: |
+          . .venv/bin/activate
+          python -m build
+        shell: alpine.sh {0}
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-dists-cpy${{ matrix.alpine-versions[1] }}-alpine-${{ matrix.alpine-versions[0] }}_aarch64
+          path: dist/
