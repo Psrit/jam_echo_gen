@@ -6,28 +6,33 @@ import warnings
 
 import numpy as np
 
+from libcpp.random cimport random_device, mt19937, uniform_real_distribution
+from libcpp.vector cimport vector
+
+cimport numpy as cnp
+
 from .utils cimport (
     join_interval,
     db,
     awgn,
-    two_pow_ceil
+    two_pow_ceil,
+    random_from_intervals
 )
-from .utils import random_from_intervals
 
 SPEED_OF_LIGHT = 299792458  # m/s
 
-def n_vec_from_azel(azim: float, elev: float):
+cdef cnp.ndarray n_vec_from_azel(double azim, double elev):
     return np.array([
         np.cos(elev) * np.sin(azim),
         np.sin(elev),
         np.cos(elev) * np.cos(azim)
     ])
 
-def steering_vec(
-        r_target: np.ndarray,
-        r_ants: np.ndarray,
-        k: float,
-        normalize: bool = False
+cdef cnp.ndarray steering_vec(
+        cnp.ndarray r_target,
+        cnp.ndarray r_ants,
+        double k,
+        bint normalize = False
 ):
     """
     Calculate the steering vector.
@@ -50,18 +55,19 @@ def steering_vec(
         a_vec = a_vec / np.sqrt(len(r_ants))
     return a_vec
 
-def line_array_pattern_steering_vecs(
-        wavelength: float,
-        num_subarrays: int,
-        dx: float,
-        num_directions: int = 256,
-        dimension: str = "angle"
+cdef tuple line_array_pattern_steering_vecs(
+        double wavelength,
+        int num_subarrays,
+        double dx,
+        int num_directions = 256,
+        str dimension = "angle"
 ):
-    r_arrays = np.zeros((num_subarrays, 3))
+    cdef cnp.ndarray r_arrays = np.zeros((num_subarrays, 3))
     r_arrays[:, 0] = \
         (np.arange(num_subarrays) - (num_subarrays - 1) / 2) * dx
 
-    k = 2 * np.pi / wavelength
+    cdef double k = 2 * np.pi / wavelength
+    cdef cnp.ndarray azims, alphas, n_vec, a_vec
 
     # steering vectors for calculating antenna pattern
     pattern_a_vecs = []  # shape=(num_directions, num_subarrays)
@@ -95,12 +101,12 @@ def channel_error(num_channels, amp_error_db=0, phase_error=np.deg2rad(0)):
 
     return channel_errors
 
-def _random_jam_alphas(
-        alpha_c,  # alpha of beam center
-        num_jams,
-        delta_m,
-        delta_s,
-        alpha_lim,
+cdef cnp.ndarray _random_jam_alphas(
+        double alpha_c,  # alpha of beam center
+        int num_jams,
+        double delta_m,
+        double delta_s,
+        double alpha_lim,
         tries=np.inf
 ):
     """
@@ -118,7 +124,21 @@ def _random_jam_alphas(
 
     """
     _tries = max(tries, 1)
-    _try_counts = 0
+    cdef int _try_counts = 0
+    cdef:
+        bint failed
+        cnp.ndarray alphas
+        int i_jam
+        vector[(double, double)] forbid_zone
+        vector[double] avail_lengths, accum_avail_lengths
+        double alpha_r_last, accum_avail_len, alpha_l, _avail_len
+        int i_fzone, i_interval
+        (double, double) _fzone_border
+        random_device rd
+        mt19937 gen = mt19937(rd())
+        uniform_real_distribution[double] dis = uniform_real_distribution[double](0., 1.)
+        double rand_val, alpha
+
     while _tries > 0:
         failed = False
 
@@ -132,27 +152,26 @@ def _random_jam_alphas(
             accum_avail_lengths = []
             alpha_r_last = 0  # Upper border of last forbidden zone
             accum_avail_len = 0
-            for i_fzone in range(len(forbid_zone)):
+            for i_fzone in range(forbid_zone.size()):
                 _fzone_border = forbid_zone[i_fzone]
                 alpha_l = _fzone_border[0]
 
                 _avail_len = alpha_l - alpha_r_last
-                avail_lengths.append(_avail_len)
+                avail_lengths.push_back(_avail_len)
 
                 accum_avail_len += _avail_len
-                accum_avail_lengths.append(accum_avail_len)
+                accum_avail_lengths.push_back(accum_avail_len)
 
                 alpha_r_last = _fzone_border[1]
 
             if accum_avail_len <= 0:
                 failed = True
 
-            rand_val = np.random.rand() * accum_avail_len
+            rand_val = dis(gen) * accum_avail_len
             i_interval = 1
-            while i_interval < len(accum_avail_lengths):
+            for i_interval in range(1, accum_avail_lengths.size()):
                 if rand_val < accum_avail_lengths[i_interval]:
                     break
-                i_interval += 1
 
             alpha = rand_val - accum_avail_lengths[i_interval - 1] \
                     + forbid_zone[i_interval - 1][1]
@@ -186,12 +205,12 @@ def _random_jam_alphas(
     # All tries failed
     return None
 
-def _random_jam_alphas_approx(
-        alpha_c,  # alpha of beam center
-        num_jams,
-        delta_m,
-        delta_s,
-        alpha_lim,
+cdef cnp.ndarray _random_jam_alphas_approx(
+        double alpha_c,  # alpha of beam center
+        int num_jams,
+        double delta_m,
+        double delta_s,
+        double alpha_lim,
         tries=np.inf
 ):
     """
@@ -213,9 +232,12 @@ def _random_jam_alphas_approx(
 
     """
     alphas = []
-    d_subint = (2 * alpha_lim - (2 * delta_m + delta_s * (num_jams - 1))) \
-               / num_jams
-    int_left = delta_m
+    cdef:
+        double d_subint = (2. * alpha_lim - (2. * delta_m + delta_s * (num_jams - 1))) \
+                          / num_jams
+        double int_left = delta_m
+        int i
+
     for i in range(num_jams):
         alphas.append(random_from_intervals([(int_left, int_left + d_subint)]))
         int_left += d_subint + delta_s
@@ -226,15 +248,15 @@ def _random_jam_alphas_approx(
     # wrap alphas to [-alpha_lim, alpha_lim]
     return alphas
 
-def random_jam_alphas(
-        alpha_c,  # alpha of beam center
-        wavelength,
-        num_subarrays,
-        dx,
-        num_jams,
-        delta_m_lw,
-        delta_s_lw,
-        alpha_pad_lw,
+cpdef cnp.ndarray random_jam_alphas(
+        double alpha_c,  # alpha of beam center
+        double wavelength,
+        int num_subarrays,
+        double dx,
+        int num_jams,
+        double delta_m_lw,
+        double delta_s_lw,
+        double alpha_pad_lw,
         tries=np.inf
 ):
     """
@@ -254,7 +276,7 @@ def random_jam_alphas(
     :param alpha_pad_lw: Minimum difference between the incoming direction
         of an arbitrary jam and `alpha`=±1 (in unit of `lw`, see below).
     :param tries: Maximum number of tries.
-    :return: Array of jam alphas, or None if generating fails.
+    :return: Array of jam alphas. If generating fails, returns an empty array.
 
     Note: Unit `lw` denotes the side-lobe width. For the uniform linear antenna
     array simulated in this function, we have:
@@ -263,11 +285,12 @@ def random_jam_alphas(
         sidelobe_width = 2 / num_subarrays
 
     """
-    _lw = wavelength / dx / num_subarrays
-    _delta_m = delta_m_lw * _lw
-    _delta_s = delta_s_lw * _lw
-    _alpha_pad = alpha_pad_lw * _lw
-    _alpha_lim = max(min(1 - _alpha_pad, 1), 0)
+    cdef:
+        double _lw = wavelength / dx / num_subarrays
+        double _delta_m = delta_m_lw * _lw
+        double _delta_s = delta_s_lw * _lw
+        double _alpha_pad = alpha_pad_lw * _lw
+        double _alpha_lim = max(min(1 - _alpha_pad, 1), 0)
 
     if 2 * _alpha_lim <= 2 * _delta_m + _delta_s * (num_jams - 1):
         min_num_subarrays = \
@@ -281,22 +304,22 @@ def random_jam_alphas(
         )
         return None
 
-    alphas = _random_jam_alphas_approx(
+    cdef cnp.ndarray alphas = _random_jam_alphas_approx(
         alpha_c, num_jams, _delta_m, _delta_s, _alpha_lim, tries=np.inf
     )
     return alphas
 
-def gen_line_array_echo(
-        wavelength: float,
-        num_subarrays: int,
-        dx: float,
-        mainlobe_azim: float,
+cdef tuple gen_line_array_echo(
+        double wavelength,
+        int num_subarrays,
+        double dx,
+        double mainlobe_azim,
         target_range_gates: typing.Union[int, np.ndarray],
         target_signal_powers: typing.Union[float, np.ndarray],
         jam_azims: typing.Union[float, np.ndarray],
         jam_powers: typing.Union[float, np.ndarray],
-        num_range_gates: int,
-        noise_power: float = 1
+        int num_range_gates,
+        double noise_power = 1.
 ):
     """
     Generate with-jam echo data for benchmarking on a uniform linear array
@@ -322,11 +345,11 @@ def gen_line_array_echo(
             simulated signal array (shape=(num_subarrays, num_range_gates))   ).
 
     """
-    r_arrays = np.zeros((num_subarrays, 3))
+    cdef cnp.ndarray r_arrays = np.zeros((num_subarrays, 3))
     r_arrays[:, 0] = \
         (np.arange(num_subarrays) - (num_subarrays - 1) / 2) * dx
 
-    k = 2 * np.pi / wavelength
+    cdef double k = 2 * np.pi / wavelength
 
     # ---------- broadcast parameters ----------
     target_range_gates = np.reshape(target_range_gates, [-1])
@@ -347,11 +370,16 @@ def gen_line_array_echo(
     jam_powers_db = db(jam_powers, unit="power")
 
     # ---------- generate target signals ----------
-    a0_vec = steering_vec(
-        n_vec_from_azel(mainlobe_azim, 0.),
-        r_arrays, k, normalize=True
-    )
-    signals = np.zeros((num_subarrays, num_range_gates), dtype=complex)
+    cdef:
+        cnp.ndarray a0_vec = steering_vec(
+            n_vec_from_azel(mainlobe_azim, 0.),
+            r_arrays, k, normalize=True
+        )
+        cnp.ndarray signals = np.zeros(
+            (num_subarrays, num_range_gates), dtype=complex
+        )
+        int _target_range_gate
+        double _target_sig_power
     for _target_range_gate, _target_sig_power in zip(
             target_range_gates, target_signal_powers
     ):
@@ -385,20 +413,20 @@ def gen_line_array_echo(
                              np.outer(a_vec_jam * channel_error(num_subarrays), _jam))
     return a0_vec, signals
 
-def gen_ula_echo_with_rand_jams(
-        wavelength: float,
-        num_subarrays: int,
-        dx: float,
-        target_azim: float,
+cdef tuple gen_ula_echo_with_rand_jams(
+        double wavelength,
+        int num_subarrays,
+        double dx,
+        double target_azim,
         target_range_gates: typing.Union[int, typing.Iterable[int]],
-        num_range_gates: int,
-        num_jams: int,
-        delta_m_lw: float,
-        delta_s_lw: float,
-        alpha_pad_lw: float,
-        signal_power: float = 1,
-        noise_power: float = 1,
-        jam_power: float = 1
+        int num_range_gates,
+        int num_jams,
+        double delta_m_lw,
+        double delta_s_lw,
+        double alpha_pad_lw,
+        double signal_power = 1,
+        double noise_power = 1,
+        double jam_power = 1
 ):
     """
     Generate with-jam signal data for benchmarking on a uniform linear array
@@ -433,7 +461,8 @@ def gen_ula_echo_with_rand_jams(
 
     """
     # ---------- generate jams ----------
-    target_alpha = np.sin(target_azim)
+    cdef double target_alpha = np.sin(target_azim)
+    cdef cnp.ndarray jam_alphas
     if num_jams > 0:
         jam_alphas = random_jam_alphas(
             target_alpha,
@@ -447,18 +476,20 @@ def gen_ula_echo_with_rand_jams(
             tries=np.inf
         )
     else:
-        jam_alphas = []
+        jam_alphas = np.array([], dtype=np.float64)
     if jam_alphas is None:
         raise RuntimeError("Cannot generate jam alphas.")
 
-    jam_azims = np.arcsin(jam_alphas)
+    cdef cnp.ndarray jam_azims = np.arcsin(jam_alphas)
 
     # jam powers in dBW (value range: [jam_power_db, jam_power_db * 105%])
-    jam_power_db = db(jam_power, unit="power")
-    jam_powers_db = (np.ones(num_jams)  # (1 + np.power(10, np.random.rand(num_jams)) * 5 / 1000)
-                     * jam_power_db)
+    cdef double jam_power_db = db(jam_power, unit="power")
+    cdef cnp.ndarray jam_powers_db = \
+        (np.ones(num_jams)  # (1 + np.power(10, np.random.rand(num_jams)) * 5 / 1000)
+         * jam_power_db)
 
     # ---------- generate echos ----------
+    cdef cnp.ndarray a0_vec, signals
     a0_vec, signals = gen_line_array_echo(
         wavelength, num_subarrays, dx,
         target_azim,
@@ -470,10 +501,10 @@ def gen_ula_echo_with_rand_jams(
     return jam_azims, jam_powers_db, a0_vec, signals
 
 def echo_gen(
-        case: int,
-        num_subarrays: int,
-        num_targets: int,
-        num_jams: int,
+        int case,
+        int num_subarrays,
+        int num_targets,
+        int num_jams,
 ):
     """
     Generate with-jam signal data for testing.
@@ -491,34 +522,39 @@ def echo_gen(
     Here 0 < num_working_subarrays <= num_subarrays.
 
     """
-    FREQ = 3e9
-    TARGET_AZIM_BOUND = 75
-    NOISE_POWER = 1  # Watts
-    FORMED_SNR_DB = 20
-    INPUT_JNR_DB = 40
+    cdef:
+        double FREQ = 3e9
+        double TARGET_AZIM_BOUND = 75
+        double NOISE_POWER = 1  # Watts
+        double FORMED_SNR_DB = 20
+        double INPUT_JNR_DB = 40
 
-    wavelength = SPEED_OF_LIGHT / FREQ
-    dx = wavelength / 2
-    lobewidth = wavelength / dx / num_subarrays
+        double wavelength = SPEED_OF_LIGHT / FREQ
+        double dx = wavelength / 2
+        double lobewidth = wavelength / dx / num_subarrays
 
-    DELTA_M_LW = 3
-    DELTA_S_LW = 3
-    ALPHA_PAD_LW = 0.05 / lobewidth
+        double DELTA_M_LW = 3
+        double DELTA_S_LW = 3
+        double ALPHA_PAD_LW = 0.05 / lobewidth
 
     # Only in case 3:
-    MIN_WORKING_ARR_COUNT = int(num_subarrays / 2)  # inclusive
-    MAX_WORKING_ARR_COUNT = num_subarrays  # exclusive
+    cdef:
+        int MIN_WORKING_ARR_COUNT = int(num_subarrays / 2)  # inclusive
+        int MAX_WORKING_ARR_COUNT = num_subarrays  # exclusive
 
-    s_power_in_per_subarr = 10 ** (FORMED_SNR_DB / 10.) * \
-                            NOISE_POWER / num_subarrays
-    j_power = 10 ** (INPUT_JNR_DB / 10.) * NOISE_POWER
+    cdef:
+        double s_power_in_per_subarr = 10 ** (FORMED_SNR_DB / 10.) * \
+                                       NOISE_POWER / num_subarrays
+        double j_power = 10 ** (INPUT_JNR_DB / 10.) * NOISE_POWER
 
-    target_azim = (np.random.rand() * 2 - 1) * np.deg2rad(TARGET_AZIM_BOUND)
+        double target_azim = (np.random.rand() * 2 - 1) * \
+                                  np.deg2rad(TARGET_AZIM_BOUND)
 
-    min_num_subarrays = \
-        (2 * DELTA_M_LW + DELTA_S_LW * (num_jams - 1)) * \
-        wavelength / (2 * dx * (1 - ALPHA_PAD_LW * lobewidth))
-    min_num_subarrays_ = two_pow_ceil(min_num_subarrays)
+    cdef:
+        double min_num_subarrays = \
+            (2 * DELTA_M_LW + DELTA_S_LW * (num_jams - 1)) * \
+            wavelength / (2 * dx * (1 - ALPHA_PAD_LW * lobewidth))
+        int min_num_subarrays_ = int(two_pow_ceil(min_num_subarrays))
     if min_num_subarrays_ == min_num_subarrays:
         min_num_subarrays_ *= 2  # make sure min_num_subarrays_ > min_num_subarrays
     if num_subarrays < min_num_subarrays_:
@@ -527,23 +563,29 @@ def echo_gen(
             f"must >= {min_num_subarrays_} but = {num_subarrays})"
         )
 
+    cdef:
+        int num_range_gates
+        cnp.ndarray possible_target_range_gates
     if case == 0:
         num_range_gates = 3 * num_subarrays
         possible_target_range_gates = np.arange(0, int(num_range_gates / 3))
     elif case == 1:
         num_range_gates = 3 * num_subarrays
         possible_target_range_gates = np.arange(0, num_range_gates)
-    elif case in (2, 3):
+    elif case == 2:
         num_range_gates = num_subarrays
         possible_target_range_gates = np.arange(0, num_range_gates)
+    elif case == 3:
+        num_range_gates = 3 * num_subarrays
+        possible_target_range_gates = np.arange(0, int(num_range_gates / 3))
     else:
         raise ValueError(f"Invalid case type: {case}. "
                          f"Only 0, 1, 2 and 3 are allowed.")
 
-    max_num_targets = possible_target_range_gates.size
+    cdef int max_num_targets = possible_target_range_gates.size
+    
     num_targets = min(num_targets, max_num_targets)
-
-    target_range_gates = np.random.choice(
+    cdef cnp.ndarray target_range_gates = np.random.choice(
         possible_target_range_gates,
         size=num_targets,
         replace=False
