@@ -45,8 +45,10 @@ cdef cnp.ndarray _array_db(cnp.ndarray x, str unit="power"):
 
     if unit == "power":
         return 10 * np.log10(x)
-    else:  # voltage
+    elif unit == "voltage":
         return 20 * np.log10(x)
+    else:
+        raise ValueError(f"Invalid unit: '{unit}'.")
 
 cpdef db(x, str unit="power"):
     """
