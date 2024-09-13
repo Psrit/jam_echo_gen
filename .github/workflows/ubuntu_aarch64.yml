@@ -8,11 +8,15 @@ on:
 
 jobs:
   build-test-package-ubuntu-aarch64:
+
     runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: false
       matrix:
         ubuntu-version: ["20.04", "22.04", "24.04"]
         python-version: ["3.8", "3.9", "3.10", "3.11"]
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
