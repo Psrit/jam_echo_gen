@@ -108,6 +108,15 @@ class DbTest(unittest.TestCase):
             )
         )
 
+    def test_invalid_unit(self):
+        # array argument
+        with self.assertRaisesRegex(ValueError, "Invalid unit: '.*'"):
+            db(np.arange(1, 100), "invalid unit")
+
+        # scalar argument
+        with self.assertRaisesRegex(ValueError, "Invalid unit: '.*'"):
+            db(1., "invalid unit")
+
 
 class TwoPowCeilTest(unittest.TestCase):
     def setUp(self):
